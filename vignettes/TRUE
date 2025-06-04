@@ -1,0 +1,10 @@
+[PROCPARS:gpps.cpp(445)] Failed to find key "Tolerance" in section [BACKSUB MALDICHROM PROCESS] in file C:\Users\eatmo\Documents\testimg.raw\test.ini.
+[PROCPARS:gpps.cpp(445)] Failed to find key "Flatten Edges" in section [BACKSUB MALDICHROM PROCESS] in file C:\Users\eatmo\Documents\testimg.raw\test.ini.
+[PROCPARS:gpps.cpp(445)] Failed to find key "Type" in section [BACKSUB MALDICHROM PROCESS] in file C:\Users\eatmo\Documents\testimg.raw\test.ini.
+[PROCPARS:gpps.cpp(435)] Failed to find section [TOFACM MALDICHROM PROCESS] in file C:\Users\eatmo\Documents\testimg.raw\test.ini.
+[PROCPARS:gpps.cpp(435)] Failed to find section [TOFACM MALDICHROM PROCESS] in file C:\Users\eatmo\Documents\testimg.raw\test.ini.
+[PROCPARS:gpps.cpp(435)] Failed to find section [TOFACM MALDICHROM PROCESS] in file C:\Users\eatmo\Documents\testimg.raw\test.ini.
+[PROCPARS:gpps.cpp(435)] Failed to find section [TOFACM MALDICHROM PROCESS] in file C:\Users\eatmo\Documents\testimg.raw\test.ini.
+[PROCPARS:gpps.cpp(435)] Failed to find section [TOFACM MALDICHROM PROCESS] in file C:\Users\eatmo\Documents\testimg.raw\test.ini.
+[PROCPARS:gpps.cpp(445)] Failed to find key "Centroiding Type" in section [CENTER MALDICHROM PROCESS] in file C:\Users\eatmo\Documents\testimg.raw\test.ini.
+[PROCPARS:gpps.cpp(445)] Failed to find key "Use Areas" in section [CENTER MALDICHROM PROCESS] in file C:\Users\eatmo\Documents\testimg.raw\test.ini.

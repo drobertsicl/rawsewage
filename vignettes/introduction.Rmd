@@ -1,0 +1,391 @@
+---
+title: "Processing data with .RAW SEWAGE (Raw Spectra Extracted With A Ginormous Effort)"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{introduction}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(rawsewage)
+library(ggplot2)
+library(future)
+library(future.apply)
+library(progressr)
+library(imager)
+library(sp)
+```
+
+# Basic setup
+
+First and foremost, you're going to need some data, and if it's not too much trouble, also know where it lives on your hard drive.
+
+```{r load raw}
+folder_path <- "~/testimg.raw/"
+idx_path <- paste0(folder_path, "_FUNC001.IDX")
+file_path <- paste0(folder_path, "_FUNC001.DAT")
+```
+
+When you go through the process of calibrating an instrument before acquisition, this has absolutely no effect on the data stored in the .DAT file. Values are stored as-is and recalibrated in software post-acquisition. The coefficients of the calibration function are stored in plaintext in the _HEADER.TXT file
+
+```{r get coefs}
+coefs <- getCoefs(paste0(folder_path, "_HEADER.TXT"))
+```
+
+The .IDX metadata stores the memory addresses of the start of each scan in the associated .DAT file. This helps speed up reading the scans, but also means if there's a Windows copy error for your 1 megabyte file then your 25 gigabyte file becomes unusable. If you have no .IDX file, you can reproduce one with the minimal amount of data to access scans using https://github.com/drobertsicl/ubmf
+
+```{r get addresses}
+adds <- getAdds(idx_path)
+```
+
+The .IDX metadata also contains per-scan TIC values, number of data points per pixel, base peak, and base peak intensity values. These can come in handy and take seconds to read.
+
+```{r get metadata}
+scan_meta <- getMeta(idx_path, coefs)
+```
+
+Estimate the image dimensions, if using a path with a ~ then use path.expand.
+
+```{r get image dimensions}
+numScans <- estDims(path.expand(folder_path))
+numScans
+```
+
+In some cases, the function will report that a wacky dimension has been returned. Often this is simply that one dimension is calculated to be 10 times larger than it's supposed to be, and you can obviously just alter that number. In more challenging cases, it may not be obvious at all what your dimensions are supposed to be.
+
+As long as more/less scans than intended have not been acquired (which is actually frequently the case) you can also calculate all theoretical image dimensions as factor pairs of the number of scans.
+
+```{r get image dimensions 2}
+dimslist <- estDims2(nrow(scan_meta))
+plotlist <- plotDims(dimslist, as.matrix(log(scan_meta$tic)))
+```
+
+You can then inspect each individual plot to see which dimension is correct. In this case it's the very last one, so we'll cut to the chase.
+
+```{r plot dimslist}
+plotlist[[46]]
+```
+However, if your run was terminated early, or the instrument decided you absolutely had to have an extra pixel somewhere, or the ghost from Ghost did a pottery lesson with your stage motor, you can try the following.
+
+```{r scan time imgdims, echo = TRUE}
+plot(scan_meta$scan_time)
+plot(scan_meta$scan_time[1:500])
+scan_n <- 50
+if(length(unique(abs(diff(timeTest(scan_meta$scan_time[1:scan_n], scan_meta$scan_time))))) >1){
+  print("More than one disjunction size detected, data may have variable length rasters or be incomplete")
+}
+cat(paste0(c(" Suggested x dimension: ", abs(diff(timeTest(scan_meta$scan_time[1:scan_n], scan_meta$scan_time)))[1], "\n", "Median no. of scans per raster: ", median(abs(diff(timeTest(scan_meta$scan_time[1:scan_n], scan_meta$scan_time)))), "\n", "Suggested y dimension: ", nrow(scan_meta) / abs(diff(timeTest(scan_meta$scan_time[1:scan_n], scan_meta$scan_time)))[1])))
+
+```
+
+Very, very occasionally, there are images which HDImaging appears to do some kind of under the hood transformation on. If you have a weird, warped image, this might help. This interfaces to maldichrom.exe exactly the way HDImaging does, processes one peak per pixel, and extracts the x/y dimension information. It is therefore very slow and stupid.
+
+You MAY have to be running RStudio with admin privileges, because randomly it will be unable to generate temporary files. This may be an R version specific issue and I'm not going to spend time investigating it. The cell below will generate a massive number of output messages in your console and hopefully not in this vignette, so try not to have anything useful in there before you run it
+
+```{r pixdims maldichrom, echo = TRUE, include = FALSE}
+# by default the maldichrom.exe location is set to where it's normally installed, if you've installed HDImaging elsewhere, point it in the right direction by including the argument exe = "your/path" in the getPos function
+
+pos_df <- getPos(folder_path)
+
+# for square pixels you can simply take the lengths of the number of unique values
+
+numScans <- c(length(unique(pos_df$xpos)), length(unique(pos_df$ypos)))
+
+# for non-square pixels affected by differing raster sizes, we should probably talk
+
+numScans
+```
+
+Plot a TIC image to make sure you're not about to do something crazy and spend half an hour processing the wrong data
+
+```{r plot tic}
+cimgplot <- matrix(data = 0, nrow = numScans[1], ncol = numScans[2])
+cimgplot <- scan_meta$tic[1:prod(numScans)]
+cimgplot <- imager::as.cimg(cimgplot, x = numScans[1], y = numScans[2])
+
+p <- ggplot(data = as.data.frame(cimgplot)) +
+  geom_raster(aes(x = x, y = rev(y), fill = log(value))) +
+  scale_fill_viridis_c(option = "magma", name = "Intensity (A.U)") + coord_fixed() +
+  scale_x_continuous(expand=c(0,0))+scale_y_continuous(expand=c(0,0)) + xlab(NULL) + ylab(NULL) + ggtitle("log TIC Image") +
+  theme(plot.title = element_text(hjust = 0.5))
+p
+```
+
+Now read in your data. If you don't use multiple threads this will be extremely slow to the point of not being worth it.
+
+```{r read raw}
+plan(multisession, workers = 8)
+handlers("txtprogressbar")
+start <- Sys.time()
+with_progress({
+peaklist_sewage <- readScans(file_path, adds = adds, batch_size = 250, calib_coefs = coefs)
+})
+stop <- Sys.time()
+stop-start
+```
+
+For comparison, to read this data into R any other way, you'd need to convert it via proteowizard, then read that intermediary file in via mzR
+
+```{r mzml}
+start <- Sys.time()
+msconexe <- "C:/Users/eatmo/AppData/Local/Apps/ProteoWizard 3.0.24094.d2966db 64-bit/msconvert.exe"
+convertR(path.expand(folder_path), path.expand(folder_path), msconexe)
+peaklist <- mzR::openMSfile(paste0(path.expand(folder_path), "testimg.mzML"))
+peaklist <- mzR::peaks(peaklist)
+stop <- Sys.time()
+stop-start
+```
+
+Me personally, I prefer 30 seconds. But is the data actually correct?
+
+If the following evaluates as FALSE, all the intensities match
+
+```{r check intensities match}
+FALSE %in% c(unlist(sapply(peaklist_sewage, "[[", 2)) == unlist(sapply(peaklist, "[", , 2)))
+```
+
+If the following evaluates as false, all the m/z values match
+
+```{r check mzs match}
+FALSE %in% c(unlist(sapply(peaklist_sewage, "[[", 1)) == unlist(sapply(peaklist, "[", , 1)))
+```
+
+And you might think "way to go dumbass", but let's look at how this difference manifests in a single scan
+
+```{r plot diff}
+plot(x = peaklist_sewage[[1000]][["mz"]], y = abs(peaklist_sewage[[1000]][["mz"]]) - peaklist[[1000]][,1], ylab = "Deviation from proteowizard m/z value", xlab = "m/z")
+```
+
+As the values are stored based on exponentiation, we see this error get magnified across different ranges as the exponent changes. As R has no native support for 32 bit floats, all calculations are performed to 64 bit precision. Truncating this to 32 bits results in:
+
+```{r float trunc}
+library(float)
+FALSE %in% c(as.float(unlist(sapply(peaklist_sewage, "[[", 1))) == unlist(sapply(peaklist, "[", , 1)))
+```
+
+A perfect match, but not necessarily the speediest.
+
+### Memory size
+
+MSI data is typically obscenely large. In this extremely small case it's only about 1 gigabyte
+
+```{r raw file size}
+file.size(file_path) / (1024^2)
+```
+Due to the 64 bits of precision however, the size in RAM is larger than the size on disk
+
+```{r mem file size}
+as.numeric(object.size(peaklist_sewage)) / 1024^2
+```
+If all m/z values are converted to 32 bits:
+
+```{r mem file size 32}
+for(i in 1:length(peaklist_sewage)){
+  peaklist_sewage[[i]][["mz"]] <- as.float(peaklist_sewage[[i]][["mz"]])
+}
+as.numeric(object.size(peaklist_sewage)) / 1024^2
+```
+In this instance, all intensities are stored as integers. This isn't guaranteed as the format can store non-integer values, so there's no code yet to force intensities to integers, but that depends on surveying more data.
+
+```{r int int}
+for(i in 1:length(peaklist_sewage)){
+  peaklist_sewage[[i]][["intensity"]] <- as.integer(peaklist_sewage[[i]][["intensity"]])
+}
+as.numeric(object.size(peaklist_sewage)) / 1024^2
+```
+And now the size in memory is more or less the same size as on disk.
+
+### What are the practical benefits of any of this?
+
+First and foremost, this is architecture and OS independent. Secondly, there's no need for duplication of data into an intermediary format. Thirdly, it is at best significantly faster, and at worst the same as current approaches. Fourthly, you're going to analyse it in an interpreted language anyway. Fifthly, say you have an absurdly large whole-slide image and you don't want to spend a weekend converting and peak picking it, we can do something about that.
+
+In simple cases, you may be able to simply cluster the TIC value and successfully segment your image.
+
+```{r subset data 1}
+tree <- genieclust::gclust(log(scan_meta$tic), k = 5)
+cut <- cutree(tree, k = 5)
+cimgplot <- matrix(data = NA, nrow = numScans[1], ncol = numScans[2])
+for(i in 1:length(scan_meta$tic)){
+cimgplot[i] <- cut[i]
+}
+cimgplot <- imager::as.cimg(cimgplot)
+cimgplot <- imager::mirror(cimgplot, "y")
+# tinker with rotations
+p <- ggplot(data = as.data.frame(cimgplot)) +
+geom_raster(aes(x = x, y = y, fill = factor(value))) +
+scale_fill_manual(values = c("#E69F00", "#000000", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#bcbcbc", "#a27500", "#5083ab", "#2a7353", "#ada82e", "#265283", "#944503", "#90587a")) + coord_fixed()
+p
+```
+
+In this case, it's ALMOST successful, but the persistent raster artifact results in scans that resemble the distribution of tissue TICs. Sometimes, including the number of data points, base peak, or base peak intensity can help.
+
+```{r subset data 2}
+tree <- genieclust::gclust(cbind(log(scan_meta$tic), scan_meta$bp), k = 5)
+cut <- cutree(tree, k = 5)
+cimgplot <- matrix(data = NA, nrow = numScans[1], ncol = numScans[2])
+for(i in 1:length(scan_meta$tic)){
+cimgplot[i] <- cut[i]
+}
+cimgplot <- imager::as.cimg(cimgplot)
+cimgplot <- imager::mirror(cimgplot, "y")
+# tinker with rotations
+p <- ggplot(data = as.data.frame(cimgplot)) +
+geom_raster(aes(x = x, y = y, fill = factor(value))) +
+scale_fill_manual(values = c("#E69F00", "#000000", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#bcbcbc", "#a27500", "#5083ab", "#2a7353", "#ada82e", "#265283", "#944503", "#90587a")) + coord_fixed()
+p
+```
+
+In this case, we encounter a resounding "not really". There are two ways of potentially mitigating this. The first is raster-wise normalisation:
+
+```{r subset data 3}
+tree <- genieclust::gclust(normRaster(as.matrix(cbind(log(scan_meta$tic), scan_meta$numpeaks)), numScans, method = "median"), k = 5)
+cut <- cutree(tree, k = 5)
+cimgplot <- matrix(data = NA, nrow = numScans[1], ncol = numScans[2])
+for(i in 1:length(scan_meta$tic)){
+cimgplot[i] <- cut[i]
+}
+cimgplot <- imager::as.cimg(cimgplot)
+cimgplot <- imager::mirror(cimgplot, "y")
+# tinker with rotations
+p <- ggplot(data = as.data.frame(cimgplot)) +
+geom_raster(aes(x = x, y = y, fill = factor(value))) +
+scale_fill_manual(values = c("#E69F00", "#000000", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#bcbcbc", "#a27500", "#5083ab", "#2a7353", "#ada82e", "#265283", "#944503", "#90587a")) + coord_fixed()
+p
+```
+
+This worked well enough that we can probably get a good tissue mask. There's also a separate function called deband, which eliminates horizontal artifacting by scaling directional Fourier coefficients to have the same variance as the rest of the image (if that doesn't mean anything to you, don't worry about it)
+
+```{r pick clusters}
+tissueclusts <- c(4,5)
+tissuepix2 <- which(cut %in% tissueclusts)
+
+# remove objects smaller than x pixels
+remnum <- 2
+cimgplot <- matrix(data = 0, nrow = numScans[1], ncol = numScans[2])
+cimgplot[which(cut %in% tissueclusts)] <- 1
+cimgplot <- imager::as.cimg(cimgplot)
+
+
+test <- split_connected(cimgplot)
+test <- test[-which(sapply(test, sum) < remnum)]
+test2 <- imappend(test, axis = "c")
+test2 <- imsplit(test2,"c") %>% add
+test2 <- as.cimg(test2)
+
+tissuepix2 <- which(test2 != 0)
+
+# fill the outline of the largest connected blob, enlarging image by one pixel then returning to original dimensions so contours still works on image edge
+templot <- cbind(rep(0, nrow(as.matrix(test2))), as.matrix(test2), rep(0, nrow(as.matrix(test2))))
+templot <- rbind(rep(0, ncol(as.matrix(templot))), as.matrix(templot), rep(0, ncol(as.matrix(templot))))
+
+ct <- contours(as.cimg(templot),nlevels=1)
+
+# get top 3 connected cluster
+
+objs <- order(sapply(ct, function(sublist) sum(sapply(sublist, length))), decreasing = TRUE)[1:3]
+
+test <- expand.grid(x = 1:nrow(templot), y = 1:ncol(templot))
+tissuepix2 <- point.in.polygon(test$x, test$y, ct[[objs[1]]]$x, ct[[objs[1]]]$y)
+tissuepix2 <- which(tissuepix2 == 1)
+cimgplot <- matrix(data = 0, nrow = nrow(templot), ncol = ncol(templot))
+cimgplot[tissuepix2] <- 1
+cimgplot <- imager::as.cimg(cimgplot)
+cimgplot <- (as.cimg(as.matrix(cimgplot)[2:(numScans[1]+1), 2:(numScans[2]+1)]))
+obj1 <- which(cimgplot == 1)
+
+cimgplot <- matrix(data = 0, nrow = numScans[1], ncol = numScans[2])
+cimgplot[obj1] <- 1
+cimgplot <- imager::as.cimg(cimgplot)
+cimgplot <- imager::mirror(cimgplot, "y")
+# tinker with rotations
+p <- ggplot(data = as.data.frame(cimgplot)) +
+geom_raster(aes(x = x, y = y, fill = factor(value))) +
+scale_fill_manual(values = c("#000000", "#FFFFFF")) + coord_fixed() +
+  ggtitle("Largest connected cluster") + theme(plot.title = element_text(hjust = 0.5))
+p
+
+test <- expand.grid(x = 1:nrow(templot), y = 1:ncol(templot))
+tissuepix2 <- point.in.polygon(test$x, test$y, ct[[objs[2]]]$x, ct[[objs[2]]]$y)
+tissuepix2 <- which(tissuepix2 == 1)
+cimgplot <- matrix(data = 0, nrow = nrow(templot), ncol = ncol(templot))
+cimgplot[tissuepix2] <- 1
+cimgplot <- imager::as.cimg(cimgplot)
+cimgplot <- (as.cimg(as.matrix(cimgplot)[2:(numScans[1]+1), 2:(numScans[2]+1)]))
+obj2 <- which(cimgplot == 1)
+
+cimgplot <- matrix(data = 0, nrow = numScans[1], ncol = numScans[2])
+cimgplot[obj2] <- 1
+cimgplot <- imager::as.cimg(cimgplot)
+cimgplot <- imager::mirror(cimgplot, "y")
+# tinker with rotations
+p <- ggplot(data = as.data.frame(cimgplot)) +
+geom_raster(aes(x = x, y = y, fill = factor(value))) +
+scale_fill_manual(values = c("#000000", "#FFFFFF")) + coord_fixed() +
+  ggtitle("Second largest connected cluster") + theme(plot.title = element_text(hjust = 0.5))
+p
+
+test <- expand.grid(x = 1:nrow(templot), y = 1:ncol(templot))
+tissuepix2 <- point.in.polygon(test$x, test$y, ct[[objs[3]]]$x, ct[[objs[3]]]$y)
+tissuepix2 <- which(tissuepix2 == 1)
+cimgplot <- matrix(data = 0, nrow = nrow(templot), ncol = ncol(templot))
+cimgplot[tissuepix2] <- 1
+cimgplot <- imager::as.cimg(cimgplot)
+cimgplot <- (as.cimg(as.matrix(cimgplot)[2:(numScans[1]+1), 2:(numScans[2]+1)]))
+obj3 <- which(cimgplot == 1)
+
+cimgplot <- matrix(data = 0, nrow = numScans[1], ncol = numScans[2])
+cimgplot[obj3] <- 1
+cimgplot <- imager::as.cimg(cimgplot)
+cimgplot <- imager::mirror(cimgplot, "y")
+# tinker with rotations
+p <- ggplot(data = as.data.frame(cimgplot)) +
+geom_raster(aes(x = x, y = y, fill = factor(value))) +
+scale_fill_manual(values = c("#000000", "#FFFFFF")) + coord_fixed() +
+  ggtitle("Third largest connected cluster") + theme(plot.title = element_text(hjust = 0.5))
+p
+```
+
+Concatenate these to be our tissue mask:
+
+```{r tissue mask}
+tissuemask <- unique(c(obj1, obj2, obj3))
+length(tissuemask) / prod(numScans)
+```
+
+It's now only ~22% of scans, and we can subset only those scans. In reality this has cut out a chunk of the middle tissue, and you may want to expand a border around your tissue with morphological operations, freehand select an ROI, etc. However, I can't knit a vignette with an interactive input, so you're free to figure out the function roiSelect on your own.
+
+```{r read raw subset}
+plan(multisession, workers = 8)
+handlers("txtprogressbar")
+start <- Sys.time()
+with_progress({
+peaklist_sewage <- readScans(file_path, adds = adds, indices = tissuemask, batch_size = 250, calib_coefs = coefs)
+})
+stop <- Sys.time()
+stop-start
+```
+
+And now just to prove that we've actually selected the right scans, we'll calculate their TICs and throw them into an image:
+
+```{r plot sub tic}
+temptic <- rep(0, prod(numScans))
+temptic[tissuemask] <- log(unlist(lapply(sapply(peaklist_sewage, "[[", 2), sum)))
+cimgplot <- matrix(data = temptic, nrow = numScans[1], ncol = numScans[2])
+cimgplot <- imager::as.cimg(cimgplot, x = numScans[1], y = numScans[2])
+p <- ggplot(data = as.data.frame(cimgplot)) +
+geom_raster(aes(x = x, y = rev(y), fill = log(value))) +
+scale_fill_viridis_c(option = "magma", name = "Intensity (A.U)") + coord_fixed() +
+scale_x_continuous(expand=c(0,0))+scale_y_continuous(expand=c(0,0)) + xlab(NULL) + ylab(NULL) + ggtitle("log TIC Image") +
+theme(plot.title = element_text(hjust = 0.5))
+p
+```
+
+In the case of large data, it's probably a better idea to incorporate code to peak pick each scan as it's processed e.g via MassSpecWavelet. But for now, this is just about data accessibility.
