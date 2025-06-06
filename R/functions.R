@@ -15,7 +15,7 @@ getCoefs <- function(filename = NULL){
     filename <- paste0(filename, "_HEADER.TXT")
   }
   
-  header <- readChar(filename, nchars = 1e+07)
+  header <- utf8::as_utf8(readChar(filename, nchars = 1e+07))
   
   if(length(strsplit(strsplit(header, "Cal Function 1: ")[[1]][2], ",T0")[[1]]) > 1){
     warning("Calibration function may be of wrong type!")
@@ -527,7 +527,6 @@ Min Peak Width Channels=4"))
 #' @export
 #' @examples
 #' normalize_raster(as.matrix(cbind(log(scan_meta$tic), scan_meta$numpeaks)), imgDims, method = "median")
-#' @details
 normRaster <- function(input_df, image_dims, method = c("mean", "median"), offset_to_zero = FALSE) {
   method <- match.arg(method)
   # Preallocate output matrix
@@ -570,7 +569,6 @@ normRaster <- function(input_df, image_dims, method = c("mean", "median"), offse
 #' @export
 #' @examples
 #' as.numeric(deband(as.matrix(scan_meta$tic), numScans))
-#' @details
 deband <- function(input_img, image_dims){
   fft_image <- matrix(data = input_img, nrow = image_dims[1], ncol = image_dims[2])
   original_image <- fft_image
@@ -598,7 +596,6 @@ deband <- function(input_img, image_dims){
 #' @export
 #' @examples
 #' roiSelect(as.matrix(scan_meta$tic), numScans)
-#' @details
 roiSelect <- function(image_df, image_dims, log = FALSE, flipy = FALSE, invert = FALSE) {
   cimgplot <- matrix(data = NA, nrow = image_dims[1], ncol = image_dims[2])
   tics <- rowSums(image_df)
