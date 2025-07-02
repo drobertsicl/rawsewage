@@ -1,3 +1,8 @@
+#' @useDynLib rawsewage, .registration = TRUE
+#' @importFrom Rcpp sourceCpp
+#' @import Rcpp
+NULL
+
 #' Get coefficients from a Waters _HEADER.TXT file
 #' @description
 #' Automatically extracts vector of calibration coefficients from Waters imaging data
@@ -294,6 +299,57 @@ readScans <- function(file_path, adds, indices = c(1:length(adds)), batch_size =
   }, future.seed = TRUE)
   
   return(unlist(result, recursive = FALSE))
+}
+
+#' Read Waters imaging data directly into an R session, using a wildly experimental C++ function
+#' @description
+#' Believe it or not, reads Waters imaging data directly into an R session
+#' @param file_path A file path to a .DAT file
+#' @param adds A vector of memory addresses computed by getAdds
+#' @param indices Indices of specific scans to be processed
+#' @param batch_size The number of scans to process per thread
+#' @param calib_coefs A vector of calibration coefficients computed by getCoefs
+#' @param use_integer_intensity Whether to return integer intensities
+#' @param use_float_mz Whether to return 32 bit floats. No logic yet to call float so still taking up 64 bits in memory
+#' @return A list of lists. Each scan generates a list containing lists for mz and intensity values
+#' @export
+#' @examples
+#' readScans_cpp("C:/My Folder/image.raw/_FUNC001.IDX", adds, batch_size = 100, calib_coefs = coefs)
+readScans_cpp <- function(file_path, adds, indices = seq_along(adds),
+                          batch_size = 250, calib_coefs = NULL, use_integer_intensity = FALSE, use_float_mz = FALSE) {
+  
+  n_blocks <- length(indices)
+  batches <- split(seq_len(n_blocks), ceiling(seq_len(n_blocks) / batch_size))
+  
+  p <- progressr::progressor(steps = length(batches))
+  
+  # Use future_lapply for parallel processing
+  result <- future.apply::future_lapply(seq_along(batches), future.seed = NULL, function(batch_idx) {
+    
+    batch_ids <- batches[[batch_idx]]
+    batch_indices <- indices[batch_ids]
+    
+    start_pos <- min(adds[batch_indices])
+    end_pos <- if (max(batch_indices) == length(adds)) {
+      file.size(file_path)
+    } else {
+      max(adds[batch_indices + 1])
+    }
+    
+    con <- file(file_path, "rb")
+    seek(con, start_pos)
+    raw_data <- readBin(con, "raw", n = end_pos - start_pos)
+    close(con)
+    
+    p()  # progress update
+    
+    # Call your Rcpp function for this batch
+    rcpp_process_batch(raw_data, adds, batch_indices, start_pos, calib_coefs)
+  })
+  
+  # future_lapply returns a list of batch results (each a list of scans)
+  # flatten to a single list of scans matching indices
+  do.call(c, result)
 }
 
 
