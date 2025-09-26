@@ -135,9 +135,9 @@ getMeta <- function(idx_path, calib_coefs = NULL) {
   frac_mz <- as.integer(byte[pos_21])
   frac_mz <- as.numeric((1/256)*frac_mz)  
   
-  adj_mz <- strtoi(substr(paste0((rawToBits(as.raw(byte[pos_20])))[1], (rawToBits(as.raw(byte[pos_20])))[2], (rawToBits(as.raw(byte[pos_20])))[3], (rawToBits(as.raw(byte[pos_20])))[4]), 1, 7), base = 2)
+  adj_mz <- as.integer(byte[pos_20])
   
-  adj_mz <- as.numeric((1/65536)*(adj_mz*15))  
+  adj_mz <- as.numeric((1/65536) * (adj_mz))  
   
   bp_mz <- data.frame(int = int_mz, frac = frac_mz, adj = adj_mz)
   bp_mz <- rowSums(bp_mz)
